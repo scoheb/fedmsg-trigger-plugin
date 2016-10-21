@@ -32,6 +32,7 @@ import hudson.triggers.TriggerDescriptor;
 import hudson.util.FormValidation;
 
 import java.io.IOException;
+import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -52,18 +53,22 @@ import org.zeromq.ZMQException;
 import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.zeromq.jms.selector.ZmqMessageSelector;
+import org.zeromq.jms.selector.ZmqSimpleMessageSelector;
 
 public class FedmsgTrigger extends Trigger<BuildableItem> {
 
     private final List<MsgCheck> checks;
     private final String hubAddr;
     private final String topic;
+    private final String selector;
     private transient BuildableItem project;
 
     @DataBoundConstructor
-    public FedmsgTrigger(String hubAddr, String topic, List<MsgCheck> checks) {
+    public FedmsgTrigger(String hubAddr, String topic, String selector, List<MsgCheck> checks) {
         this.hubAddr = hubAddr;
         this.topic = topic;
+        this.selector = selector;
         if (checks == null) {
             checks = new ArrayList<MsgCheck>();
         }
@@ -76,6 +81,10 @@ public class FedmsgTrigger extends Trigger<BuildableItem> {
 
     public String getTopic() {
         return topic;
+    }
+
+    public String getSelector() {
+        return selector;
     }
 
     public List<MsgCheck> getChecks() {
@@ -195,6 +204,7 @@ public class FedmsgTrigger extends Trigger<BuildableItem> {
 
     private static class FedmsgSubscriber implements Runnable {
 
+        private static final String DEFAULT_PREFIX = "org.fedoraproject";
         private Context ctx;
         private Socket subscriber;
 
@@ -217,7 +227,12 @@ public class FedmsgTrigger extends Trigger<BuildableItem> {
         public void addConsumer(FedmsgTrigger consumer) {
             synchronized (consumers) {
                 consumers.add(consumer);
-                subscriber.subscribe(consumer.getTopic().getBytes());
+                //subscriber.subscribe(consumer.getTopic().getBytes());
+                if (consumer.getTopic() == null || consumer.getTopic().equals("")) {
+                    subscriber.subscribe(DEFAULT_PREFIX.getBytes());
+                } else {
+                    subscriber.subscribe(consumer.getTopic().getBytes());
+                }
             }
         }
 
@@ -225,13 +240,19 @@ public class FedmsgTrigger extends Trigger<BuildableItem> {
             synchronized (consumers) {
                 boolean unsubscribe = true;
                 for (FedmsgTrigger trigger : consumers) {
-                    if (trigger != consumer && consumer.getTopic().equals(trigger.getTopic())) {
-                        unsubscribe = false;
-                        break;
+                    if (trigger != consumer) {
+                        if (consumer.getTopic() != null && consumer.getTopic().equals(trigger.getTopic())) {
+                            unsubscribe = false;
+                            break;
+                        }
                     }
                 }
                 if (unsubscribe) {
-                    subscriber.unsubscribe(consumer.getTopic().getBytes());
+                    if (consumer.getTopic() == null || consumer.getTopic().equals("")) {
+                        subscriber.unsubscribe(DEFAULT_PREFIX.getBytes());
+                    } else {
+                        subscriber.unsubscribe(consumer.getTopic().getBytes());
+                    }
                 }
                 consumers.remove(consumer);
             }
@@ -268,24 +289,37 @@ public class FedmsgTrigger extends Trigger<BuildableItem> {
                 // TODO: move to another thread
                 try {
                     FedmsgMessage data = mapper.readValue(json, FedmsgMessage.class);
-                    LOGGER.finest("received: " + data.getMsg().toString());
+                    data.getMsg().put("topic", data.getTopic());
+                    LOGGER.fine("received: " + data.getMsg().toString());
 
                     synchronized (consumers) {
                         for (FedmsgTrigger trigger : consumers) {
-                            if (!trigger.getTopic().equals(data.getTopic())) {
-                                continue;
-                            }
-
-                            boolean allPassed = true;
-                            for (MsgCheck check : trigger.getChecks()) {
-                                if (!check.check(data)) {
-                                    allPassed = false;
-                                    break;
+                            if (trigger.getTopic() == null || trigger.getTopic().equals("")) {
+                                //ZmqMessageSelector selector = ZmqSimpleMessageSelector.parse("topic like 'org.fedoraproject.prod.buildsys.untag'");
+                                ZmqMessageSelector selectorObj = ZmqSimpleMessageSelector.parse(trigger.getSelector());
+                                LOGGER.fine("Evaluating selector: " + selectorObj.toString());
+                                if (!selectorObj.evaluate(data.getMsg())) {
+                                    LOGGER.fine("false");
+                                    continue;
                                 }
-                            }
-
-                            if (allPassed) {
+                                LOGGER.fine("true -> triggering");
                                 trigger.run(data);
+                            } else {
+                                if (!trigger.getTopic().equals(data.getTopic())) {
+                                    continue;
+                                }
+
+                                boolean allPassed = true;
+                                for (MsgCheck check : trigger.getChecks()) {
+                                    if (!check.check(data)) {
+                                        allPassed = false;
+                                        break;
+                                    }
+                                }
+
+                                if (allPassed) {
+                                    trigger.run(data);
+                                }
                             }
                         }
                     }
@@ -295,6 +329,8 @@ public class FedmsgTrigger extends Trigger<BuildableItem> {
                 } catch (JsonMappingException e) {
                     LOGGER.severe(e.toString());
                 } catch (IOException e) {
+                    LOGGER.severe(e.toString());
+                } catch (ParseException e) {
                     LOGGER.severe(e.toString());
                 }
             }

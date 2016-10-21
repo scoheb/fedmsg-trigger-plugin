@@ -20,6 +20,7 @@
   <properties>
     <jeromq.version>0.3.4</jeromq.version>
     <jackson.version>2.5.2</jackson.version>
+    <version.jms>1.1-rev-1</version.jms>
   </properties>
 
   <licenses>
@@ -48,6 +49,16 @@
       <groupId>org.zeromq</groupId>
       <artifactId>jeromq</artifactId>
       <version>${jeromq.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.zeromq</groupId>
+      <artifactId>jeromq-jms</artifactId>
+      <version>1.0-SNAPSHOT</version>
+    </dependency>
+    <dependency>
+      <groupId>javax.jms</groupId>
+      <artifactId>jms-api</artifactId>
+      <version>${version.jms}</version>
     </dependency>
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>

@@ -3,6 +3,9 @@
   <f:entry title="${%Hub}" field="hubAddr">
     <f:textbox />
   </f:entry>
+  <f:entry title="${%JMS Selector}" field="selector">
+    <f:textbox />
+  </f:entry>
   <f:entry title="${%Topic}" field="topic">
     <f:textbox />
   </f:entry>
